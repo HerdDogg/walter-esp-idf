@@ -1,51 +1,3 @@
-/**
- * @file WalterModem.cpp
- * @author Daan Pape <daan@dptechnics.com>
- * @date 9 Jan 2023
- * @copyright DPTechnics bv
- * @brief Walter Modem library
- *
- * @section LICENSE
- *
- * Copyright (C) 2023, DPTechnics bv
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   1. Redistributions of source code must retain the above copyright notice,
- *      this list of conditions and the following disclaimer.
- *
- *   2. Redistributions in binary form must reproduce the above copyright
- *      notice, this list of conditions and the following disclaimer in the
- *      documentation and/or other materials provided with the distribution.
- *
- *   3. Neither the name of DPTechnics bv nor the names of its contributors may
- *      be used to endorse or promote products derived from this software
- *      without specific prior written permission.
- *
- *   4. This software, with or without modification, must only be used with a
- *      Walter board from DPTechnics bv.
- *
- *   5. Any software provided in binary form under this license must not be
- *      reverse engineered, decompiled, modified and/or disassembled.
- *
- * THIS SOFTWARE IS PROVIDED BY DPTECHNICS BV “AS IS” AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY, NONINFRINGEMENT, AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL DPTECHNICS BV OR CONTRIBUTORS BE LIABLE FOR ANY
- * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * @section DESCRIPTION
- *
- * This file contains Walter's modem library implementation.
- */
-
 #include "WalterModem.h"
 
 #include <ctime>
@@ -65,6 +17,7 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 
+// #define CORE_DEBUG_LEVEL
 /**
  * @brief The RX pin on which modem data is received.
  */
@@ -125,7 +78,8 @@
 /**
  * @brief uart buffer size
  */
-#define UART_BUF_SIZE 128
+// #define UART_BUF_SIZE 128
+#define UART_BUF_SIZE 1024
 
 /**
  * @brief Check if a WalterModemBuffer starts with a given string literal.
@@ -1056,6 +1010,7 @@ void WalterModem::_handleRxData(void) {
   }
 }
 #else
+int byteCount = 0;
 void WalterModem::_handleRxData(void *params) {
   size_t uartBufLen;
   static char incomingBuf[UART_BUF_SIZE];
@@ -1070,10 +1025,17 @@ void WalterModem::_handleRxData(void *params) {
 
     if (_rxHandlerInterrupted) {
       vTaskDelay(pdMS_TO_TICKS(1000));
+      ESP_LOGI(__func__, "uart rx handler interrupted");
       continue;
     }
-
-    uart_get_buffered_data_len((uart_port_t)_uartNo, (size_t *)&uartBufLen);
+    if (_uartNo != 1)
+      _uartNo = 1;
+    if (uartBufLen > 50)
+      byteCount += (int)uartBufLen;
+    ESP_LOGD(__func__, "uart get buffered data len %d %d (%d)",
+             (int)1 /*_uartNo*/, (int)uartBufLen, byteCount);
+    uart_get_buffered_data_len((uart_port_t)1 /*_uartNo*/,
+                               (size_t *)&uartBufLen);
     if (uartBufLen > UART_BUF_SIZE) {
       uartBufLen = UART_BUF_SIZE;
     }
@@ -1230,6 +1192,11 @@ void WalterModem::_queueProcessingTask(void *args) {
           }
         }
       } else if (qItem.rsp != NULL) {
+        if (!curCmd) {
+          ESP_LOGE(__func__, "Null cmd or buffer passed to _processQueueRsp!");
+        } else {
+          ESP_LOGD(__func__, "Calling _processQueueRsp with curCmd=%p", curCmd);
+        }
         _processQueueRsp(curCmd, qItem.rsp);
       }
     }
@@ -1454,7 +1421,19 @@ static void coap_received_from_bluecherry(const WalterModemRsp *rsp,
 
 void WalterModem::_processQueueRsp(WalterModemCmd *cmd,
                                    WalterModemBuffer *buff) {
-  ESP_LOGD("WalterModem", "RX: %.*s", buff->size, buff->data);
+  if (!cmd) {
+    ESP_LOGE(__func__, "cmd is null in _processQueueRsp");
+  }
+  if (!buff) {
+    ESP_LOGE(__func__, "buff is null in _processQueueRsp");
+    // return;  // Prevent further processing.
+  }
+  ESP_LOGD(__func__, "Entered _processQueueRsp with cmd=%p, buffer=%p", cmd,
+           buff);
+  // ESP_LOGD("WalterModem", "RX: %.*s", buff->size, buff->data);
+  int n = buff->size < 256 ? buff->size : 256;
+  ESP_LOGD(__func__, "RX buffer first %d bytes:", n);
+  ESP_LOG_BUFFER_HEXDUMP(__func__, buff->data, n, ESP_LOG_DEBUG);
 
   WalterModemState result = WALTER_MODEM_STATE_OK;
 
@@ -1486,9 +1465,16 @@ void WalterModem::_processQueueRsp(WalterModemCmd *cmd,
       cmd->rsp->type = WALTER_MODEM_RSP_DATA_TYPE_CME_ERROR;
       cmd->rsp->data.cmeError = (WalterModemCMEError)cmeError;
     }
-
-    cmd->state = WALTER_MODEM_CMD_STATE_RETRY_AFTER_ERROR;
-    buff->free = true;
+    if (cmd != NULL) {
+      cmd->state = WALTER_MODEM_CMD_STATE_RETRY_AFTER_ERROR;
+    } else {
+      ESP_LOGE(__func__, "cmd is NULL");
+    }
+    if (buff != NULL) {
+      buff->free = true;
+    } else {
+      ESP_LOGE(__func__, "buff is NULL");
+    }
     return;
   } else if (_buffStartsWith(buff, "+CFUN: ")) {
     const char *rspStr = _buffStr(buff);
@@ -1501,7 +1487,6 @@ void WalterModem::_processQueueRsp(WalterModemCmd *cmd,
     }
     cmd->rsp->type = WALTER_MODEM_RSP_DATA_TYPE_OPSTATE;
     cmd->rsp->data.opState = (WalterModemOpState)opState;
-
   } else if (_buffStartsWith(buff, "+CPIN: ") && cmd != NULL) {
     cmd->rsp->type = WALTER_MODEM_RSP_DATA_TYPE_SIM_STATE;
     if (_dataStrIs(buff, "+CPIN: ", "READY")) {
@@ -3883,6 +3868,60 @@ bool WalterModem::httpGetContextStatus(uint8_t profileId) {
   return _httpContextSet[profileId].connected;
 }
 
+WalterModemPDPContextState WalterModem::getPDPContextState(uint8_t profileId) {
+  if (profileId >= WALTER_MODEM_MAX_HTTP_PROFILES) {
+    ESP_LOGE(__func__, "No such profile: %d", (int)profileId);
+    return WALTER_MODEM_PDP_CONTEXT_STATE_FREE;
+  }
+  char stateStr[16];
+  switch (_pdpCtxSet[profileId].state) {
+  case WALTER_MODEM_PDP_CONTEXT_STATE_FREE:
+    strncpy(stateStr, "FREE", sizeof(stateStr));
+    break;
+  case WALTER_MODEM_PDP_CONTEXT_STATE_RESERVED:
+    strncpy(stateStr, "RESERVED", sizeof(stateStr));
+    break;
+  case WALTER_MODEM_PDP_CONTEXT_STATE_INACTIVE:
+    strncpy(stateStr, "INACTIVE", sizeof(stateStr));
+    break;
+  case WALTER_MODEM_PDP_CONTEXT_STATE_ACTIVE:
+    strncpy(stateStr, "ACTIVE", sizeof(stateStr));
+    break;
+  case WALTER_MODEM_PDP_CONTEXT_STATE_ATTACHED:
+    strncpy(stateStr, "ATTACHED", sizeof(stateStr));
+    break;
+  default:
+    strncpy(stateStr, "FREE", sizeof(stateStr));
+    break;
+  }
+  ESP_LOGD(__func__, "PDP Context %d State: %s", (int)profileId, stateStr);
+  return _pdpCtxSet[profileId].state;
+}
+
+WalterModemHttpContextState
+WalterModem::httpGetContextState(uint8_t profileId) {
+  if (profileId >= WALTER_MODEM_MAX_HTTP_PROFILES) {
+    ESP_LOGE(__func__, "No such profile: %d", (int)profileId);
+    return WALTER_MODEM_HTTP_CONTEXT_STATE_IDLE;
+  }
+  char stateStr[16];
+  switch (_httpContextSet[profileId].state) {
+  case WALTER_MODEM_HTTP_CONTEXT_STATE_IDLE:
+    strncpy(stateStr, "IDLE", sizeof(stateStr));
+    break;
+  case WALTER_MODEM_HTTP_CONTEXT_STATE_EXPECT_RING:
+    strncpy(stateStr, "EXPECT_RING", sizeof(stateStr));
+    break;
+  case WALTER_MODEM_HTTP_CONTEXT_STATE_GOT_RING:
+    strncpy(stateStr, "GOT_RING", sizeof(stateStr));
+    break;
+  default:
+    strncpy(stateStr, "IDLE", sizeof(stateStr));
+    break;
+  }
+  ESP_LOGD(__func__, "HTTP Context %d State: %s", (int)profileId, stateStr);
+  return _httpContextSet[profileId].state;
+}
 bool WalterModem::httpQuery(uint8_t profileId, const char *uri,
                             WalterModemHttpQueryCmd httpQueryCmd,
                             char *contentTypeBuf, uint16_t contentTypeBufSize,
@@ -3912,6 +3951,8 @@ bool WalterModem::httpQuery(uint8_t profileId, const char *uri,
   stringsBuffer->size +=
       sprintf((char *)stringsBuffer->data, "AT+SQNHTTPQRY=%d,%d,\"%s\"",
               profileId, httpQueryCmd, uri);
+  // sprintf((char *)stringsBuffer->data, "AT+SQNHTTPQRY=%d,%d,\"%s\",\"%s\"",
+  //         profileId, httpQueryCmd, "Range: bytes=0-1023", uri);
 
   _runCmd(arr((const char *)stringsBuffer->data), "OK", rsp, cb, args,
           completeHandler, (void *)(_httpContextSet + profileId),

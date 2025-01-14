@@ -69,7 +69,7 @@
 /**
  * @brief The maximum number of items in the task queue.
  */
-#define WALTER_MODEM_TASK_QUEUE_MAX_ITEMS 32
+#define WALTER_MODEM_TASK_QUEUE_MAX_ITEMS 256
 
 /**
  * @brief The size in bytes of the task queue.
@@ -85,17 +85,17 @@
 /**
  * @brief The size of an AT response buffer.
  */
-#define WALTER_MODEM_RSP_BUF_SIZE 1536
+#define WALTER_MODEM_RSP_BUF_SIZE 1536 * 2
 
 /**
  * @brief The number of buffers in the buffer pool.
  */
-#define WALTER_MODEM_BUFFER_POOL_SIZE 8
+#define WALTER_MODEM_BUFFER_POOL_SIZE 16 * 2
 
 /**
  * @brief The size of the stack of the command and response processing task.
  */
-#define WALTER_MODEM_TASK_STACK_SIZE 4096
+#define WALTER_MODEM_TASK_STACK_SIZE 8192 * 2
 
 /**
  * @brief The default number of attempts to execute a command.
@@ -3286,6 +3286,10 @@ public:
    */
   static bool httpGetContextStatus(uint8_t profileId);
 
+  WalterModemHttpContextState httpGetContextState(uint8_t profileId);
+  uint16_t httpGetContextContentLength(uint8_t profileId);
+
+  WalterModemPDPContextState getPDPContextState(uint8_t profileId);
   /**
    * @brief Perform a http get, delete or head request.
    * No need to first open the connection with the buggy httpConnect
