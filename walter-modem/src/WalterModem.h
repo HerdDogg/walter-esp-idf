@@ -49,14 +49,15 @@
 #ifndef WALTER_MODEM_H
 #define WALTER_MODEM_H
 
-#include <bitset>
-#include <cstdint>
+// #include <bitset>
 #include <mutex>
+#include <stdint.h>
 #ifdef CORE_DEBUG_LEVEL
-#include <Arduino.h>
+// #include <Arduino.h>
 #endif
 #include <condition_variable>
 
+#include <driver/uart.h>
 #include <esp_partition.h>
 #include <esp_spi_flash.h>
 #include <esp_system.h>
@@ -69,7 +70,7 @@
 /**
  * @brief The maximum number of items in the task queue.
  */
-#define WALTER_MODEM_TASK_QUEUE_MAX_ITEMS 256
+#define WALTER_MODEM_TASK_QUEUE_MAX_ITEMS 16
 
 /**
  * @brief The size in bytes of the task queue.
@@ -80,22 +81,23 @@
 /**
  * @brief The maximum number of pending commands.
  */
-#define WALTER_MODEM_MAX_PENDING_COMMANDS 32
+#define WALTER_MODEM_MAX_PENDING_COMMANDS 8
 
 /**
  * @brief The size of an AT response buffer.
  */
-#define WALTER_MODEM_RSP_BUF_SIZE 1536 * 2
+// #define WALTER_MODEM_RSP_BUF_SIZE (1536 * 4)
+#define WALTER_MODEM_RSP_BUF_SIZE (4096 * 5)
 
 /**
  * @brief The number of buffers in the buffer pool.
  */
-#define WALTER_MODEM_BUFFER_POOL_SIZE 16 * 2
+#define WALTER_MODEM_BUFFER_POOL_SIZE 8
 
 /**
  * @brief The size of the stack of the command and response processing task.
  */
-#define WALTER_MODEM_TASK_STACK_SIZE 8192 * 2
+#define WALTER_MODEM_TASK_STACK_SIZE 4096
 
 /**
  * @brief The default number of attempts to execute a command.
@@ -530,6 +532,8 @@ typedef enum {
   WALTER_MODEM_RSP_DATA_TYPE_SIGNAL_QUALITY,
   WALTER_MODEM_RSP_DATA_TYPE_CELL_INFO,
   WALTER_MODEM_RSP_DATA_TYPE_SIM_STATE,
+  WALTER_MODEM_RSP_DATA_TYPE_SIM_CARD_ID,
+  WALTER_MODEM_RSP_DATA_TYPE_SIM_CARD_IMSI,
   WALTER_MODEM_RSP_DATA_TYPE_CME_ERROR,
   WALTER_MODEM_RSP_DATA_TYPE_PDP_CTX_ID,
   WALTER_MODEM_RSP_DATA_TYPE_BANDSET_CFG_SET,
@@ -537,12 +541,11 @@ typedef enum {
   WALTER_MODEM_RSP_DATA_TYPE_SOCKET_ID,
   WALTER_MODEM_RSP_DATA_TYPE_GNSS_ASSISTANCE_DATA,
   WALTER_MODEM_RSP_DATA_TYPE_CLOCK,
+  WALTER_MODEM_RSP_DATA_TYPE_IDENTITY,
   WALTER_MODEM_RSP_DATA_TYPE_BLUECHERRY,
   WALTER_MODEM_RSP_DATA_TYPE_HTTP_RESPONSE,
   WALTER_MODEM_RSP_DATA_TYPE_COAP,
-  WALTER_MODEM_RSP_DATA_TYPE_MQTT,
-  WALTER_MODEM_RSP_DATA_TYPE_IMEI,
-  WALTER_MODEM_RSP_DATA_TYPE_ICCID
+  WALTER_MODEM_RSP_DATA_TYPE_MQTT
 } WalterModemRspDataType;
 
 /**
@@ -1113,6 +1116,18 @@ typedef struct {
   WalterModemBandSelection config[WALTER_MODEM_MAX_BANDSEL_SETSIZE];
 } WalterModemBandSelectionConfigSet;
 
+typedef struct {
+  /**
+   * @brief A 0-terminated string representation of the SIM ICCID.
+   */
+  char iccid[23];
+
+  /**
+   * @brief A 0-terminated string representation of the SIM eUICCID.
+   */
+  char euiccid[23];
+} WalterModemSIMCardID;
+
 /**
  * @brief This structure represents the two addresses that a certain PDP context
  * can have.
@@ -1133,6 +1148,27 @@ typedef struct {
    */
   const char *pdpAddress2;
 } WalterModemPDPAddressList;
+
+/**
+ * @brief This structure contains the IMEI, IMEISV and SVN identity of the
+ * modem.
+ */
+typedef struct {
+  /**
+   * @brief A 0-terminated string representation of the IMEI number.
+   */
+  char imei[16];
+
+  /**
+   * @brief A 0-terminated string representation of the IMEISV number.
+   */
+  char imeisv[17];
+
+  /**
+   * @brief A 0-terminated string representation of the SVN number.
+   */
+  char svn[3];
+} WalterModemIdentity;
 
 /**
  * @brief This structure contains one of possibly multiple BlueCherry messages
@@ -1276,12 +1312,12 @@ typedef struct {
    * @brief http response status code
    * including our own code to indicate errors during httpDidRing
    */
-  uint8_t httpStatus;
+  uint16_t httpStatus;
 
   /**
    * @brief content length
    */
-  uint16_t contentLength;
+  uint32_t contentLength;
 } WalterModemHttpResponse;
 
 /**
@@ -1394,6 +1430,16 @@ union uWalterModemRspData {
   WalterModemSIMState simState;
 
   /**
+   * @brief The ICCID and/or eUICCID of the SIM card.
+   */
+  WalterModemSIMCardID simCardID;
+
+  /**
+   * @brief The 0-terminated string representation of the active IMSI.
+   */
+  char imsi[16];
+
+  /**
    * @brief The CME error received from the modem.
    */
   WalterModemCMEError cmeError;
@@ -1414,8 +1460,7 @@ union uWalterModemRspData {
   int rssi;
 
   /**
-   * @brief
-   *
+   * @brief The current signal quality.
    */
   WalterModemSignalQuality signalQuality;
 
@@ -1450,6 +1495,11 @@ union uWalterModemRspData {
   int64_t clock;
 
   /**
+   * @brief The modem identity.
+   */
+  WalterModemIdentity identity;
+
+  /**
    * @brief The BlueCherry data
    */
   WalterModemBlueCherryData blueCherry;
@@ -1468,11 +1518,6 @@ union uWalterModemRspData {
    * @brief MQTT response
    */
   WalterModemMqttResponse mqttResponse;
-
-  char imei[16];
-  char iccid[24];
-  char raw[64];
-  char bands[16][32];
 };
 
 /**
@@ -1523,12 +1568,12 @@ typedef struct {
   /**
    * @brief Pointer to the data in the buffer.
    */
-  uint8_t data[WALTER_MODEM_RSP_BUF_SIZE] = {0};
+  EXT_RAM_BSS_ATTR uint8_t data[WALTER_MODEM_RSP_BUF_SIZE] = {0};
 
   /**
    * @brief The number of actual data bytes in the buffer.
    */
-  uint16_t size = 0;
+  uint32_t size = 0;
 
   /**
    * @brief This volatile flag is set to true when the buffer is currently
@@ -1691,7 +1736,7 @@ typedef struct {
   /**
    * @brief In raw data chunk parser state, we remember nr expected bytes
    */
-  uint16_t rawChunkSize = 0;
+  uint32_t rawChunkSize = 0;
 } WalterModemATParserData;
 
 /**
@@ -2003,12 +2048,12 @@ typedef struct {
   /**
    * @brief Last incoming ring: http status code
    */
-  uint8_t httpStatus;
+  uint16_t httpStatus;
 
   /**
    * @brief Last incoming ring: length
    */
-  uint16_t contentLength;
+  uint32_t contentLength;
 
   /**
    * @brief Target buffer to hold content type header after ring URC
@@ -2180,7 +2225,8 @@ private:
 #ifdef CORE_DEBUG_LEVEL
   static inline HardwareSerial *_uart = NULL;
 #else
-  static inline uint8_t _uartNo = 1;
+  // static inline uint8_t _uartNo = 1;
+  static inline uart_port_t _uartNo = (uart_port_t)1;
   static inline StackType_t _rxTaskStack[WALTER_MODEM_TASK_STACK_SIZE];
   static inline StaticTask_t _rxTaskBuf;
 #endif
@@ -2323,7 +2369,7 @@ private:
    * @param atBufLen The length of the incoming AT buffer.
    * @param args Optional user arguments.
    */
-  static inline void (*_usrATHandler)(const uint8_t *atBuf, uint16_t atBufLen,
+  static inline void (*_usrATHandler)(const uint8_t *atBuf, uint32_t atBufLen,
                                       void *args) = NULL;
 
   /**
@@ -2643,7 +2689,7 @@ private:
                                        WalterModemState result) = NULL,
                void *completeHandlerArg = NULL,
                WalterModemCmdType type = WALTER_MODEM_CMD_TYPE_TX_WAIT,
-               uint8_t *data = NULL, uint16_t dataSize = 0,
+               uint8_t *data = NULL, uint32_t dataSize = 0,
                WalterModemBuffer *stringsBuffer = NULL,
                uint8_t maxAttempts = WALTER_MODEM_DEFAULT_CMD_ATTEMTS);
 
@@ -2800,6 +2846,18 @@ private:
   static bool _tlsUploadKey(bool isPrivateKey, uint8_t slotIdx,
                             const char *key);
 
+  /**
+   * @brief Calculate the Luhn checksum for a 14-digit imei.
+   *
+   * This function will return the Luhn checksum for a 14-digit IMEI
+   * number and return it as an ASCII character.
+   *
+   * @param imei The 14-digit IMEI number
+   *
+   * @return The Luhn checksum as an ASCII character.
+   */
+  static char _getLuhnChecksum(const char *imei);
+
 public:
   /**
    * @brief Initialize the modem.
@@ -2827,7 +2885,7 @@ public:
 #ifdef CORE_DEBUG_LEVEL
   static bool begin(HardwareSerial *uart, uint8_t watchdogTimeout = 0);
 #else
-  static bool begin(uint8_t uartNo, uint8_t watchdogTimeout = 0);
+  static bool begin(uart_port_t uartNo, uint8_t watchdogTimeout = 0);
 #endif
 
   /**
@@ -2853,7 +2911,7 @@ public:
    *
    * @return None.
    */
-  static void setATHandler(void (*handler)(const uint8_t *, uint16_t,
+  static void setATHandler(void (*handler)(const uint8_t *, uint32_t,
                                            void *) = NULL,
                            void *args = NULL);
 
@@ -2998,10 +3056,6 @@ public:
    */
   static bool getRSSI(WalterModemRsp *rsp = NULL, walterModemCb cb = NULL,
                       void *args = NULL);
-  static bool getIMEI(WalterModemRsp *rsp = NULL, walterModemCb cb = NULL,
-                      void *args = NULL);
-  static bool getICCID(WalterModemRsp *rsp = NULL, walterModemCb cb = NULL,
-                       void *args = NULL);
 
   /**
    * @brief Get extended RSRQ and RSRP signal quality.
@@ -3025,6 +3079,8 @@ public:
    * This function returns information about the serving and
    * neighbouring cells such as operator, cell ID, RSSI, RSRP...
    *
+   * @param type The type of cell information to retreive, defaults to
+   * the cell which is currently serving the connection.
    * @param rsp Pointer to a modem response structure to save the result
    * of the command in. When NULL is given the result is ignored.
    * @param cb Optional callback argument, when not NULL this function
@@ -3038,6 +3094,23 @@ public:
                                  WalterModemRsp *rsp = NULL,
                                  walterModemCb cb = NULL, void *args = NULL);
 
+  /**
+   * @brief Get the identity of the modem (IMEI, IMEISV, SVN).
+   *
+   * This function retrieves the IMEI, IMEISV and SVN from the modem.
+   *
+   * @param rsp Pointer to a modem response structure to save the result
+   * of the command in. When NULL is given the result is ignored.
+   * @param cb Optional callback argument, when not NULL this function
+   * will return immediately.
+   * @param args Optional argument to pass to the callback.
+   *
+   * @return True on success, false otherwise.
+   */
+  static bool getIdentity(WalterModemRsp *rsp = NULL, walterModemCb cb = NULL,
+                          void *args = NULL);
+
+  static bool getDeviceInfo(WalterModemRsp *rsp, walterModemCb cb, void *args);
   /**
    * @brief Disconnect mqtt connection.
    *
@@ -3286,10 +3359,6 @@ public:
    */
   static bool httpGetContextStatus(uint8_t profileId);
 
-  WalterModemHttpContextState httpGetContextState(uint8_t profileId);
-  uint16_t httpGetContextContentLength(uint8_t profileId);
-
-  WalterModemPDPContextState getPDPContextState(uint8_t profileId);
   /**
    * @brief Perform a http get, delete or head request.
    * No need to first open the connection with the buggy httpConnect
@@ -3309,11 +3378,14 @@ public:
    * @return True on success, false otherwise.
    */
   static bool httpQuery(
-      uint8_t profileId, const char *uri,
+      uint8_t profileId, const char *uri, char *extraHeaderLine,
       WalterModemHttpQueryCmd httpQueryCmd = WALTER_MODEM_HTTP_QUERY_CMD_GET,
       char *contentTypeBuf = NULL, uint16_t contentTypeBufSize = 0,
       WalterModemRsp *rsp = NULL, walterModemCb cb = NULL, void *args = NULL);
 
+  static bool fgetData(uint16_t maxBytes);
+  static bool fget(const char *url, WalterModemRsp *rsp, walterModemCb cb,
+                   void *args, uint8_t sync, char *fname, uint8_t spid);
   /**
    * @brief Perform a http post or put request.
    * No need to first open the connection with the buggy httpConnect
@@ -3358,7 +3430,7 @@ public:
    * or no data expected (eg no ring received).
    */
   static bool httpDidRing(uint8_t profileId, uint8_t *targetBuf,
-                          uint16_t targetBufSize, WalterModemRsp *rsp = NULL);
+                          uint32_t targetBufSize, WalterModemRsp *rsp = NULL);
 
   /**
    * @brief Initialize BlueCherry COAP bridge.
@@ -3404,8 +3476,8 @@ public:
    * BlueCherrySynchronize call.
    *
    * The arduino developer will now need to poll for the ACKnowledgement
-   * and the incoming messages using blueCherryDidRing, before more messages can
-   * be published.
+   * and the incoming messages using blueCherryDidRing, before more messages
+   * can be published.
    *
    * Even if nothing was enqueued for publish, this call must frequently
    * be executed if Walter is subscribed to one or more MQTT topics.
@@ -3415,8 +3487,9 @@ public:
    *
    * @return True if we have sent the message and are awaiting response,
    * false in the following cases:
-   * - if we are still awaiting a response from a previous blueCherrySynchronize
-   *   call (which the arduino program should know already)
+   * - if we are still awaiting a response from a previous
+   * blueCherrySynchronize call (which the arduino program should know
+   * already)
    * - if we could not connect to the COAP to MQTT bridge server
    * - if setting the COAP header or sending the COAP data failed
    */
@@ -3746,6 +3819,47 @@ public:
                           void *args = NULL);
 
   /**
+   * @brief Get the SIM ICCID and/or eUICCID.
+   *
+   * The function will receive the ICCID (Integrated Circuit Card ID) and
+   * eUICCID (embedded Universal Integrated Circuit Card ID) of the
+   * installed SIM card. For this function to be able to actually read
+   * these numbers from the SIM, the modem must be in the
+   * WALTER_MODEM_OPSTATE_FULL or WALTER_MODEM_OPSTATE_NO_RF operational
+   * state.
+   *
+   * @param rsp Pointer to a modem response structure to save the result
+   * of the command in. When NULL is given the result is ignored.
+   * @param cb Optional callback argument, when not NULL this function
+   * will return immediately.
+   * @param args Optional argument to pass to the callback.
+   *
+   * @return True on success, false otherwise.
+   */
+  static bool getSIMCardID(WalterModemRsp *rsp = NULL, walterModemCb cb = NULL,
+                           void *args = NULL);
+
+  /**
+   * @brief Get the IMSI on the SIM card.
+   *
+   * This function will receive the IMSI (International Mobile Subscriber
+   * Identity) number which is currently active on the SIM card.For this
+   * function to be able to actually read the IMSI from the SIM, the modem
+   * must be in the WALTER_MODEM_OPSTATE_FULL or
+   * WALTER_MODEM_OPSTATE_NO_RF operational state.
+   *
+   * @param rsp Pointer to a modem response structure to save the result
+   * of the command in. When NULL is given the result is ignored.
+   * @param cb Optional callback argument, when not NULL this function
+   * will return immediately.
+   * @param args Optional argument to pass to the callback.
+   *
+   * @return True on success, false otherwise.
+   */
+  static bool getSIMCardIMSI(WalterModemRsp *rsp = NULL,
+                             walterModemCb cb = NULL, void *args = NULL);
+
+  /**
    * @brief Set the SIM card's PIN code.
    *
    * This function will set the PIN code of the SIM card. It is required
@@ -3801,11 +3915,11 @@ public:
    *
    * @param mode Enable or disable the use of PSM.
    * @param reqTau The requested extended periodic TAU value (T3412).
-   * This is coded as one byte (octet 3) of the GPRS Timer 3 information element
-   * coded as bit format (e.g. "00100001" equals 1 hour).
+   * This is coded as one byte (octet 3) of the GPRS Timer 3 information
+   * element coded as bit format (e.g. "00100001" equals 1 hour).
    * @param reqActive The requested Active Time value (T3324).
-   * This is coded as one byte (octet 3) of the GPRS Timer 2 information element
-   * coded as bit format (e.g. "00000101" equals 10 seconds).
+   * This is coded as one byte (octet 3) of the GPRS Timer 2 information
+   * element coded as bit format (e.g. "00000101" equals 10 seconds).
    * @param rsp Pointer to a modem response structure to save the result
    * of the command in. When NULL is given the result is ignored.
    * @param cb Optional callback argument, when not NULL this function
@@ -4239,4 +4353,6 @@ public:
   static void offlineMotaUpgrade(uint8_t *otaBuffer);
 };
 
+extern char debugBuf[1024];
+extern uint32_t debugNumBytes;
 #endif
